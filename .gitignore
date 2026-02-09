@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+.env.example
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Build outputs
+.next/
+dist/
+build/
+
+# Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Misc
+*.tmp
+*.temp
