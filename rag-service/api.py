@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -42,7 +42,7 @@ EVIDENCE_FOLDER = Path(__file__).parent / "evidence"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 TOP_K_RESULTS = 3
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 LLM_MODEL = "llama-3.1-8b-instant"
 
 DETECTIVE_SYSTEM_PROMPT = """You are a veteran Cold Case Detective with decades of experience solving complex mysteries.
@@ -122,8 +122,12 @@ def initialize_rag():
     chunks = text_splitter.split_documents(documents)
     print(f"🔪 Created {len(chunks)} chunks")
     
-    # Create vector store
-    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    # Create vector store (using HuggingFace Inference API - no torch needed)
+    hf_token = os.getenv("HF_API_TOKEN", "")
+    embeddings = HuggingFaceInferenceAPIEmbeddings(
+        api_key=hf_token,
+        model_name=EMBEDDING_MODEL
+    )
     vector_store = FAISS.from_documents(documents=chunks, embedding=embeddings)
     print("✅ Vector store created")
     
