@@ -163,7 +163,7 @@ def initialize_rag():
         str(EVIDENCE_FOLDER),
         glob="*.txt",
         loader_cls=TextLoader,
-        show_progress=True
+        show_progress=False
     )
     documents = loader.load()
     
