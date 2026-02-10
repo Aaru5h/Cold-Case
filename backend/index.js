@@ -22,8 +22,12 @@ const PYTHON_API = process.env.PYTHON_API_URL || 'http://localhost:8000';
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/coldcase';
 
 // Middleware
+const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3001')
+  .split(',')
+  .map(s => s.trim());
+
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001'],
+  origin: corsOrigins,
   credentials: true
 }));
 app.use(express.json());

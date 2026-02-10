@@ -1,4 +1,8 @@
-# Cold Case Detective - RAG Application Dependencies
+# Cold Case Detective - RAG Dependencies (CPU-only, Render-optimized)
+
+# PyTorch CPU-only (MUST be installed first via CPU index)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
 
 # LangChain Core
 langchain>=0.3.0
@@ -6,7 +10,7 @@ langchain-community>=0.3.0
 langchain-groq>=0.2.0
 langchain-huggingface>=0.1.0
 
-# Embeddings
+# Embeddings (uses CPU torch above)
 sentence-transformers>=2.2.0
 
 # Vector Store
