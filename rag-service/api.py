@@ -31,7 +31,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-from huggingface_hub import InferenceClient
+import requests as http_requests
 
 # Load environment variables
 load_dotenv()
@@ -93,31 +93,62 @@ def format_docs(docs):
 # =============================================================================
 
 class HFAPIEmbeddings(Embeddings):
-    """HuggingFace Inference API embeddings using the official huggingface_hub client."""
+    """HuggingFace Inference API embeddings using plain HTTP requests (router URL)."""
     
     def __init__(self, model_name: str, api_key: str):
         if not api_key:
             raise RuntimeError("HF_API_TOKEN is not set. Get a free token at https://huggingface.co/settings/tokens")
-        self.model_name = model_name
-        self.client = InferenceClient(token=api_key)
+        # Use the NEW router URL explicitly (Serverless Inference API)
+        self.api_url = f"https://router.huggingface.co/hf-inference/models/{model_name}"
+        self.headers = {"Authorization": f"Bearer {api_key}"}
     
-    def _get_embedding(self, text: str) -> list[float]:
-        """Get embedding for a single text using the official client."""
-        result = self.client.feature_extraction(text, model=self.model_name)
-        # result is a numpy array — may be 2D (tokens x dim), mean pool to 1D
-        import numpy as np
-        arr = np.array(result)
-        if arr.ndim == 2:
-            arr = arr.mean(axis=0)
-        return arr.tolist()
+    def _call_api(self, texts: list[str]) -> list[list[float]]:
+        """Call HF Inference API and return embeddings."""
+        response = http_requests.post(
+            self.api_url,
+            headers=self.headers,
+            json={"inputs": texts, "options": {"wait_for_model": True}}
+        )
+        if response.status_code != 200:
+            if response.status_code == 403:
+                raise RuntimeError(
+                    f"HF API Forbidden (403): Your token lacks permissions. "
+                    f"Please update your token permissions to include 'Inference: Make calls to inference API' "
+                    f"at https://huggingface.co/settings/tokens"
+                )
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"HF API Not Found (404): The model '{self.api_url}' could not be found via the Router API. "
+                    "Please check if the model name is correct and available on the Serverless Inference API."
+                )
+            raise RuntimeError(f"HF API error ({response.status_code}): {response.text}")
+        
+        result = response.json()
+        
+        # Handle token-level embeddings (3D) → mean pool to sentence embeddings
+        processed = []
+        for emb in result:
+            if isinstance(emb[0], list):
+                # Mean pool across tokens
+                dim = len(emb[0])
+                pooled = [sum(token[i] for token in emb) / len(emb) for i in range(dim)]
+                processed.append(pooled)
+            else:
+                processed.append(emb)
+        return processed
     
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of documents."""
-        return [self._get_embedding(text) for text in texts]
+        all_embeddings = []
+        batch_size = 32
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            all_embeddings.extend(self._call_api(batch))
+        return all_embeddings
     
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query."""
-        return self._get_embedding(text)
+        return self._call_api([text])[0]
 
 
 def initialize_rag():
