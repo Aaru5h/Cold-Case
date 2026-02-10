@@ -25,11 +25,13 @@ from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
+from langchain_core.embeddings import Embeddings
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+
+import requests as http_requests
 
 # Load environment variables
 load_dotenv()
@@ -86,6 +88,57 @@ def format_docs(docs):
     return "\n\n---\n\n".join(formatted)
 
 
+# =============================================================================
+# LIGHTWEIGHT EMBEDDINGS (no torch needed)
+# =============================================================================
+
+class HFAPIEmbeddings(Embeddings):
+    """HuggingFace Inference API embeddings using plain HTTP requests."""
+    
+    def __init__(self, model_name: str, api_key: str):
+        if not api_key:
+            raise RuntimeError("HF_API_TOKEN is not set. Get a free token at https://huggingface.co/settings/tokens")
+        self.api_url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{model_name}"
+        self.headers = {"Authorization": f"Bearer {api_key}"}
+    
+    def _call_api(self, texts: list[str]) -> list[list[float]]:
+        """Call HF Inference API and return embeddings."""
+        response = http_requests.post(
+            self.api_url,
+            headers=self.headers,
+            json={"inputs": texts, "options": {"wait_for_model": True}}
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"HF API error ({response.status_code}): {response.text}")
+        
+        result = response.json()
+        
+        # Handle token-level embeddings (3D) → mean pool to sentence embeddings
+        processed = []
+        for emb in result:
+            if isinstance(emb[0], list):
+                # Mean pool across tokens
+                dim = len(emb[0])
+                pooled = [sum(token[i] for token in emb) / len(emb) for i in range(dim)]
+                processed.append(pooled)
+            else:
+                processed.append(emb)
+        return processed
+    
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Embed a list of documents."""
+        all_embeddings = []
+        batch_size = 32
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            all_embeddings.extend(self._call_api(batch))
+        return all_embeddings
+    
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single query."""
+        return self._call_api([text])[0]
+
+
 def initialize_rag():
     """Initialize (or re-initialize) the RAG system."""
     print("🚀 Initializing RAG system...")
@@ -124,10 +177,7 @@ def initialize_rag():
     
     # Create vector store (using HuggingFace Inference API - no torch needed)
     hf_token = os.getenv("HF_API_TOKEN", "")
-    embeddings = HuggingFaceInferenceAPIEmbeddings(
-        api_key=hf_token,
-        model_name=EMBEDDING_MODEL
-    )
+    embeddings = HFAPIEmbeddings(model_name=EMBEDDING_MODEL, api_key=hf_token)
     vector_store = FAISS.from_documents(documents=chunks, embedding=embeddings)
     print("✅ Vector store created")
     
