@@ -98,7 +98,7 @@ class HFAPIEmbeddings(Embeddings):
     def __init__(self, model_name: str, api_key: str):
         if not api_key:
             raise RuntimeError("HF_API_TOKEN is not set. Get a free token at https://huggingface.co/settings/tokens")
-        self.api_url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{model_name}"
+        self.api_url = f"https://router.huggingface.co/pipeline/feature-extraction/{model_name}"
         self.headers = {"Authorization": f"Bearer {api_key}"}
     
     def _call_api(self, texts: list[str]) -> list[list[float]]:
