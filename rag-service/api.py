@@ -10,11 +10,13 @@ Endpoints:
 """
 
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -85,7 +87,7 @@ def format_docs(docs):
 
 
 def initialize_rag():
-    """Initialize the RAG system."""
+    """Initialize (or re-initialize) the RAG system."""
     print("🚀 Initializing RAG system...")
     
     # Check for API key
@@ -144,6 +146,18 @@ def initialize_rag():
     
     rag.is_ready = True
     print("🤖 RAG system ready!")
+
+
+def extract_pdf_text(pdf_path: Path) -> str:
+    """Extract text content from a PDF file."""
+    from PyPDF2 import PdfReader
+    reader = PdfReader(str(pdf_path))
+    text_parts = []
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text_parts.append(page_text)
+    return "\n\n".join(text_parts)
 
 
 # =============================================================================
@@ -245,6 +259,95 @@ async def query_detective(request: QueryRequest):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# FILE UPLOAD
+# =============================================================================
+
+@app.post("/upload")
+async def upload_evidence(file: UploadFile = File(...)):
+    """Upload a PDF or TXT evidence file."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    
+    # Validate file type
+    ext = Path(file.filename).suffix.lower()
+    if ext not in [".txt", ".pdf"]:
+        raise HTTPException(status_code=400, detail="Only .txt and .pdf files are supported")
+    
+    try:
+        # Save the uploaded file
+        save_path = EVIDENCE_FOLDER / file.filename
+        with open(save_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        # If PDF, extract text and save as .txt
+        txt_filename = file.filename
+        if ext == ".pdf":
+            text_content = extract_pdf_text(save_path)
+            if not text_content.strip():
+                save_path.unlink()  # Remove empty PDF
+                raise HTTPException(status_code=400, detail="Could not extract text from PDF")
+            txt_filename = Path(file.filename).stem + ".txt"
+            txt_path = EVIDENCE_FOLDER / txt_filename
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(text_content)
+        
+        # Re-index the vector store
+        initialize_rag()
+        
+        return {
+            "message": f"Evidence file '{file.filename}' uploaded successfully",
+            "filename": txt_filename,
+            "files": rag.evidence_files
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+# =============================================================================
+# EVIDENCE READER
+# =============================================================================
+
+@app.get("/evidence/{filename}")
+async def read_evidence(filename: str):
+    """Read the full content of an evidence file."""
+    file_path = EVIDENCE_FOLDER / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"Evidence file '{filename}' not found")
+    
+    if not file_path.suffix == ".txt":
+        raise HTTPException(status_code=400, detail="Only .txt files can be read")
+    
+    try:
+        content = file_path.read_text(encoding="utf-8")
+        return {"filename": filename, "content": content}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
+
+
+# =============================================================================
+# INVESTIGATION TIPS
+# =============================================================================
+
+@app.get("/tips")
+async def get_tips():
+    """Get investigation tips with suggested queries."""
+    tips = [
+        {"text": "Ask about specific suspects", "query": "Who are the main suspects in this case and what are their motives?"},
+        {"text": "Query timeline of events", "query": "What is the complete timeline of events on the night of the crime?"},
+        {"text": "Look for connections", "query": "Are there any connections or contradictions between the witness statements?"},
+        {"text": "Request evidence summary", "query": "Give me a complete summary of all physical evidence found at the crime scene."},
+        {"text": "Check financial motives", "query": "Is there any financial evidence or motive related to this case?"},
+        {"text": "Analyze witness credibility", "query": "How credible are the witness statements? Are there any inconsistencies?"},
+    ]
+    return {"tips": tips}
 
 
 # =============================================================================

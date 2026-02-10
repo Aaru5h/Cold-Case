@@ -8,7 +8,13 @@
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config({ path: '../.env' });
+
+// Multer config - store uploads temporarily
+const upload = multer({ dest: '/tmp/coldcase-uploads/' });
 
 const app = express();
 const PORT = process.env.SERVER_PORT || 5000;
@@ -205,6 +211,70 @@ app.get('/api/sources', async (req, res) => {
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch sources' });
+  }
+});
+
+// Upload evidence file
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // Read the temp file and forward to Python API
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const blob = new Blob([fileBuffer], { type: req.file.mimetype });
+    const formData = new FormData();
+    formData.append('file', blob, req.file.originalname);
+
+    const response = await fetch(`${PYTHON_API}/upload`, {
+      method: 'POST',
+      body: formData
+    });
+
+    // Clean up temp file
+    fs.unlinkSync(req.file.path);
+
+    if (!response.ok) {
+      const error = await response.json();
+      return res.status(response.status).json(error);
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Upload error:', error);
+    // Clean up temp file on error
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: 'Failed to upload file', details: error.message });
+  }
+});
+
+// Read evidence file content
+app.get('/api/evidence/:filename', async (req, res) => {
+  try {
+    const response = await fetch(`${PYTHON_API}/evidence/${encodeURIComponent(req.params.filename)}`);
+    if (!response.ok) {
+      const error = await response.json();
+      return res.status(response.status).json(error);
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to read evidence file' });
+  }
+});
+
+// Get investigation tips
+app.get('/api/tips', async (req, res) => {
+  try {
+    const response = await fetch(`${PYTHON_API}/tips`);
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch tips' });
   }
 });
 

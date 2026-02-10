@@ -18,3 +18,7 @@ python-dotenv>=1.0.0
 # API Server
 fastapi>=0.109.0
 uvicorn>=0.27.0
+
+# File Upload & PDF Support
+python-multipart>=0.0.6
+PyPDF2>=3.0.0
