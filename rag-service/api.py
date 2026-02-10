@@ -31,7 +31,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-import requests as http_requests
+from huggingface_hub import InferenceClient
 
 # Load environment variables
 load_dotenv()
@@ -93,50 +93,31 @@ def format_docs(docs):
 # =============================================================================
 
 class HFAPIEmbeddings(Embeddings):
-    """HuggingFace Inference API embeddings using plain HTTP requests."""
+    """HuggingFace Inference API embeddings using the official huggingface_hub client."""
     
     def __init__(self, model_name: str, api_key: str):
         if not api_key:
             raise RuntimeError("HF_API_TOKEN is not set. Get a free token at https://huggingface.co/settings/tokens")
-        self.api_url = f"https://router.huggingface.co/pipeline/feature-extraction/{model_name}"
-        self.headers = {"Authorization": f"Bearer {api_key}"}
+        self.model_name = model_name
+        self.client = InferenceClient(token=api_key)
     
-    def _call_api(self, texts: list[str]) -> list[list[float]]:
-        """Call HF Inference API and return embeddings."""
-        response = http_requests.post(
-            self.api_url,
-            headers=self.headers,
-            json={"inputs": texts, "options": {"wait_for_model": True}}
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"HF API error ({response.status_code}): {response.text}")
-        
-        result = response.json()
-        
-        # Handle token-level embeddings (3D) → mean pool to sentence embeddings
-        processed = []
-        for emb in result:
-            if isinstance(emb[0], list):
-                # Mean pool across tokens
-                dim = len(emb[0])
-                pooled = [sum(token[i] for token in emb) / len(emb) for i in range(dim)]
-                processed.append(pooled)
-            else:
-                processed.append(emb)
-        return processed
+    def _get_embedding(self, text: str) -> list[float]:
+        """Get embedding for a single text using the official client."""
+        result = self.client.feature_extraction(text, model=self.model_name)
+        # result is a numpy array — may be 2D (tokens x dim), mean pool to 1D
+        import numpy as np
+        arr = np.array(result)
+        if arr.ndim == 2:
+            arr = arr.mean(axis=0)
+        return arr.tolist()
     
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of documents."""
-        all_embeddings = []
-        batch_size = 32
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            all_embeddings.extend(self._call_api(batch))
-        return all_embeddings
+        return [self._get_embedding(text) for text in texts]
     
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query."""
-        return self._call_api([text])[0]
+        return self._get_embedding(text)
 
 
 def initialize_rag():
