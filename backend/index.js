@@ -11,13 +11,21 @@ const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-require('dotenv').config({ path: '../.env' });
+
+// Load .env: local first (deployment), then parent (local dev)
+const localEnv = path.join(__dirname, '.env');
+const parentEnv = path.join(__dirname, '..', '.env');
+if (fs.existsSync(localEnv)) {
+  require('dotenv').config({ path: localEnv });
+} else {
+  require('dotenv').config({ path: parentEnv });
+}
 
 // Multer config - store uploads temporarily
 const upload = multer({ dest: '/tmp/coldcase-uploads/' });
 
 const app = express();
-const PORT = process.env.SERVER_PORT || 5000;
+const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
 const PYTHON_API = process.env.PYTHON_API_URL || 'http://localhost:8000';
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/coldcase';
 
@@ -286,14 +294,13 @@ app.get('/api/tips', async (req, res) => {
 // START SERVER
 // =============================================================================
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
 ║         🔍 Cold Case Detective - Express Server 🔍            ║
 ╠═══════════════════════════════════════════════════════════════╣
-║  Server:     http://localhost:${PORT}                           ║
+║  Server:     http://0.0.0.0:${PORT}                           ║
 ║  Python API: ${PYTHON_API}                        ║
-║  MongoDB:    ${MONGO_URI.substring(0, 40)}...  ║
 ╚═══════════════════════════════════════════════════════════════╝
   `);
 });

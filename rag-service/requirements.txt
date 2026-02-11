@@ -4,9 +4,10 @@
 langchain>=0.3.0
 langchain-community>=0.3.0
 langchain-groq>=0.2.0
+langchain-text-splitters>=0.3.0
 
-# Embeddings via HuggingFace Inference API (official client)
-huggingface_hub>=0.20.0
+# Local Embeddings (no external API needed)
+sentence-transformers>=2.2.0
 
 # Vector Store
 faiss-cpu>=1.7.4

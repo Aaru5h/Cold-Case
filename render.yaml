@@ -1,0 +1,63 @@
+# Render Blueprint - Cold Case Detective
+# Deploy all 3 services with: https://render.com/deploy
+
+services:
+  # ─────────────────────────────────────────────
+  # Python RAG Service (FastAPI + LangChain)
+  # ─────────────────────────────────────────────
+  - type: web
+    name: coldcase-rag
+    runtime: python
+    region: oregon
+    rootDir: rag-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.8
+
+  # ─────────────────────────────────────────────
+  # Express.js Backend (API Gateway + MongoDB)
+  # ─────────────────────────────────────────────
+  - type: web
+    name: coldcase-backend
+    runtime: node
+    region: oregon
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: PYTHON_API_URL
+        fromService:
+          name: coldcase-rag
+          type: web
+          property: url
+      - key: MONGODB_URI
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: NODE_VERSION
+        value: 20.11.0
+
+  # ─────────────────────────────────────────────
+  # Next.js Frontend
+  # ─────────────────────────────────────────────
+  - type: web
+    name: coldcase-frontend
+    runtime: node
+    region: oregon
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          name: coldcase-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: NODE_VERSION
+        value: 20.11.0

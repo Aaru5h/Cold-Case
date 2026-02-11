@@ -31,10 +31,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-import requests as http_requests
+from sentence_transformers import SentenceTransformer
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (local .env first, then parent for local dev)
+load_dotenv()  # loads ./rag-service/.env if it exists
+load_dotenv(Path(__file__).parent.parent / '.env')  # fallback to root .env
 
 # =============================================================================
 # CONFIGURATION
@@ -89,66 +90,24 @@ def format_docs(docs):
 
 
 # =============================================================================
-# LIGHTWEIGHT EMBEDDINGS (no torch needed)
+# LOCAL EMBEDDINGS (no API calls needed)
 # =============================================================================
 
-class HFAPIEmbeddings(Embeddings):
-    """HuggingFace Inference API embeddings using plain HTTP requests (router URL)."""
+class LocalEmbeddings(Embeddings):
+    """Local sentence-transformers embeddings — no API dependency, runs on CPU."""
     
-    def __init__(self, model_name: str, api_key: str):
-        if not api_key:
-            raise RuntimeError("HF_API_TOKEN is not set. Get a free token at https://huggingface.co/settings/tokens")
-        # Use the NEW router URL explicitly (Serverless Inference API)
-        self.api_url = f"https://router.huggingface.co/hf-inference/models/{model_name}"
-        self.headers = {"Authorization": f"Bearer {api_key}"}
-    
-    def _call_api(self, texts: list[str]) -> list[list[float]]:
-        """Call HF Inference API and return embeddings."""
-        response = http_requests.post(
-            self.api_url,
-            headers=self.headers,
-            json={"inputs": texts, "options": {"wait_for_model": True}}
-        )
-        if response.status_code != 200:
-            if response.status_code == 403:
-                raise RuntimeError(
-                    f"HF API Forbidden (403): Your token lacks permissions. "
-                    f"Please update your token permissions to include 'Inference: Make calls to inference API' "
-                    f"at https://huggingface.co/settings/tokens"
-                )
-            if response.status_code == 404:
-                raise RuntimeError(
-                    f"HF API Not Found (404): The model '{self.api_url}' could not be found via the Router API. "
-                    "Please check if the model name is correct and available on the Serverless Inference API."
-                )
-            raise RuntimeError(f"HF API error ({response.status_code}): {response.text}")
-        
-        result = response.json()
-        
-        # Handle token-level embeddings (3D) → mean pool to sentence embeddings
-        processed = []
-        for emb in result:
-            if isinstance(emb[0], list):
-                # Mean pool across tokens
-                dim = len(emb[0])
-                pooled = [sum(token[i] for token in emb) / len(emb) for i in range(dim)]
-                processed.append(pooled)
-            else:
-                processed.append(emb)
-        return processed
+    def __init__(self, model_name: str):
+        print(f"📦 Loading embedding model: {model_name}")
+        self.model = SentenceTransformer(model_name)
+        print("✅ Embedding model loaded")
     
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of documents."""
-        all_embeddings = []
-        batch_size = 32
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            all_embeddings.extend(self._call_api(batch))
-        return all_embeddings
+        return self.model.encode(texts, show_progress_bar=False).tolist()
     
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query."""
-        return self._call_api([text])[0]
+        return self.model.encode(text, show_progress_bar=False).tolist()
 
 
 def initialize_rag():
@@ -165,7 +124,10 @@ def initialize_rag():
     
     txt_files = list(EVIDENCE_FOLDER.glob("*.txt"))
     if not txt_files:
-        raise RuntimeError(f"No evidence files in {EVIDENCE_FOLDER}")
+        print("⚠️  No evidence files found yet. Upload files via /upload to get started.")
+        rag.evidence_files = []
+        rag.is_ready = False
+        return
     
     rag.evidence_files = [f.name for f in txt_files]
     print(f"📁 Found {len(txt_files)} evidence files")
@@ -187,9 +149,8 @@ def initialize_rag():
     chunks = text_splitter.split_documents(documents)
     print(f"🔪 Created {len(chunks)} chunks")
     
-    # Create vector store (using HuggingFace Inference API - no torch needed)
-    hf_token = os.getenv("HF_API_TOKEN", "")
-    embeddings = HFAPIEmbeddings(model_name=EMBEDDING_MODEL, api_key=hf_token)
+    # Create vector store (local embeddings — no API calls needed)
+    embeddings = LocalEmbeddings(model_name=EMBEDDING_MODEL)
     vector_store = FAISS.from_documents(documents=chunks, embedding=embeddings)
     print("✅ Vector store created")
     
@@ -233,7 +194,11 @@ def extract_pdf_text(pdf_path: Path) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize RAG on startup."""
-    initialize_rag()
+    try:
+        initialize_rag()
+    except Exception as e:
+        print(f"⚠️  RAG initialization error: {e}")
+        print("   The service will start but /query won't work until evidence is uploaded.")
     yield
 
 
