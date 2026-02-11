@@ -31,7 +31,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer (replaced with fastembed)
 
 # Load environment variables (local .env first, then parent for local dev)
 load_dotenv()  # loads ./rag-service/.env if it exists
@@ -45,7 +45,7 @@ EVIDENCE_FOLDER = Path(__file__).parent / "evidence"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 TOP_K_RESULTS = 3
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5" # Optimized for FastEmbed
 LLM_MODEL = "llama-3.1-8b-instant"
 
 DETECTIVE_SYSTEM_PROMPT = """You are a veteran Cold Case Detective with decades of experience solving complex mysteries.
@@ -94,20 +94,26 @@ def format_docs(docs):
 # =============================================================================
 
 class LocalEmbeddings(Embeddings):
-    """Local sentence-transformers embeddings — no API dependency, runs on CPU."""
+    """Local FastEmbed embeddings — lightweight, CPU-optimized, no torch needed."""
     
     def __init__(self, model_name: str):
         print(f"📦 Loading embedding model: {model_name}")
-        self.model = SentenceTransformer(model_name)
+        # FastEmbed uses "Qdrant/all-MiniLM-L6-v2-onnx" by default when "sentence-transformers/all-MiniLM-L6-v2" is requested
+        # We'll use the specific FastEmbed supported name to be safe, or just let it map automatically
+        from fastembed import TextEmbedding
+        self.model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5") # efficient and good quality
         print("✅ Embedding model loaded")
     
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of documents."""
-        return self.model.encode(texts, show_progress_bar=False).tolist()
+        # fastembed returns a generator, convert to list
+        return list(self.model.embed(texts))
     
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query."""
-        return self.model.encode(text, show_progress_bar=False).tolist()
+        # fastembed expects a list
+        result = list(self.model.embed([text]))
+        return result[0]
 
 
 def initialize_rag():

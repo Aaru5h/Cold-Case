@@ -6,8 +6,8 @@ langchain-community>=0.3.0
 langchain-groq>=0.2.0
 langchain-text-splitters>=0.3.0
 
-# Local Embeddings (no external API needed)
-sentence-transformers>=2.2.0
+# Local Embeddings (FastEmbed - lightweight, no torch)
+fastembed>=0.2.0
 
 # Vector Store
 faiss-cpu>=1.7.4

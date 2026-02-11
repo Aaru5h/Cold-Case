@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -43,7 +43,7 @@ CHUNK_OVERLAP = 50
 TOP_K_RESULTS = 3
 
 # Model settings (Groq = FREE cloud LLM, HuggingFace = FREE local embeddings)
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # Fast, runs locally, no API needed
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"  # Fast, runs locally, no API needed
 LLM_MODEL = "llama-3.1-8b-instant"  # Fast Groq model (free tier)
 
 # Detective system prompt
@@ -161,8 +161,8 @@ def create_vector_store(chunks: list) -> FAISS:
     if not chunks:
         raise ValueError("No chunks provided to create vector store")
     
-    # Initialize HuggingFace embeddings (runs locally, no API needed)
-    embeddings = HuggingFaceEmbeddings(
+    # Initialize FastEmbed (runs locally, lighter than Torch)
+    embeddings = FastEmbedEmbeddings(
         model_name=EMBEDDING_MODEL,
     )
     
