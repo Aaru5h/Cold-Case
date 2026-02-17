@@ -88,7 +88,14 @@ const isMongoConnected = () => mongoose.connection.readyState === 1;
 app.get('/api/health', async (req, res) => {
   try {
     const pythonHealth = await fetch(`${PYTHON_API}/health`);
-    const pythonData = await pythonHealth.json();
+    let pythonData = { status: 'unknown' };
+    
+    const contentType = pythonHealth.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      pythonData = await pythonHealth.json();
+    } else {
+      pythonData = { status: 'error', details: 'Non-JSON response from Python API' };
+    }
     
     res.json({
       status: 'healthy',
@@ -116,43 +123,58 @@ app.post('/api/query', async (req, res) => {
     }
     
     // Forward to Python API
-    const response = await fetch(`${PYTHON_API}/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question })
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      return res.status(response.status).json(error);
-    }
-    
-    const data = await response.json();
-    
-    // Save to session if sessionId provided
-    if (sessionId && isMongoConnected()) {
-      try {
-        const session = await Session.findById(sessionId);
-        if (session) {
-          session.messages.push(
-            { role: 'user', content: question },
-            { role: 'detective', content: data.answer, sources: data.sources }
-          );
-          session.updatedAt = new Date();
-          
-          // Update title from first question if it's still default
-          if (session.title === 'New Investigation' && session.messages.length === 2) {
-            session.title = question.substring(0, 50) + (question.length > 50 ? '...' : '');
-          }
-          
-          await session.save();
-        }
-      } catch (err) {
-        console.error('Error saving to session:', err);
+    try {
+      const response = await fetch(`${PYTHON_API}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+      
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await response.text();
+        console.error('Python API returned non-JSON:', text.substring(0, 200));
+        return res.status(502).json({ 
+          error: 'Invalid response from Python API', 
+          details: 'Received HTML/Success page instead of JSON. Check PYTHON_API_URL.' 
+        });
       }
+
+      if (!response.ok) {
+        const error = await response.json();
+        return res.status(response.status).json(error);
+      }
+      
+      const data = await response.json();
+      
+      // Save to session if sessionId provided
+      if (sessionId && isMongoConnected()) {
+        try {
+          const session = await Session.findById(sessionId);
+          if (session) {
+            session.messages.push(
+              { role: 'user', content: question },
+              { role: 'detective', content: data.answer, sources: data.sources }
+            );
+            session.updatedAt = new Date();
+            
+            // Update title from first question if it's still default
+            if (session.title === 'New Investigation' && session.messages.length === 2) {
+              session.title = question.substring(0, 50) + (question.length > 50 ? '...' : '');
+            }
+            
+            await session.save();
+          }
+        } catch (err) {
+          console.error('Error saving to session:', err);
+        }
+      }
+      
+      res.json(data);
+    } catch (fetchError) {
+      console.error('Python API Fetch connection error:', fetchError);
+      return res.status(503).json({ error: 'Failed to connect to Detective Service', details: fetchError.message });
     }
-    
-    res.json(data);
   } catch (error) {
     console.error('Query error:', error);
     res.status(500).json({ error: 'Failed to query detective', details: error.message });
