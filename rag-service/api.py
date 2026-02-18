@@ -197,23 +197,42 @@ def extract_pdf_text(pdf_path: Path) -> str:
 # FASTAPI APP
 # =============================================================================
 
+import asyncio
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize RAG on startup."""
-    try:
-        initialize_rag()
-    except Exception as e:
-        print(f"⚠️  RAG initialization error: {e}")
-        print("   The service will start but /query won't work until evidence is uploaded.")
+    """Initialize RAG in the background on startup."""
+    # Start initialization in the background
+    asyncio.create_task(background_init())
     yield
+
+
+async def background_init():
+    """Run initialization ensuring it doesn't block the main loop."""
+    try:
+        # Run the heavy synchronous initialization in a separate thread
+        await asyncio.to_thread(initialize_rag)
+    except Exception as e:
+        print(f"❌ RAG initialization failed: {e}")
+        # We don't crash the app, just log it. 
+        # The /health endpoint will show is_ready=False.
 
 
 app = FastAPI(
     title="Cold Case Detective API",
     description="RAG-powered detective assistant for analyzing evidence",
-    version="1.0.0",
+    version="1.0.1",
     lifespan=lifespan
 )
+
+# =============================================================================
+# ROOT ENDPOINT (For Load Balancers)
+# =============================================================================
+
+@app.get("/")
+async def root():
+    """Root endpoint for basic connectivity checks."""
+    return {"message": "Cold Case Detective API is running", "status": "online"}
 
 # CORS for frontend
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")
@@ -257,8 +276,9 @@ class HealthResponse(BaseModel):
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Check if the service is healthy and ready."""
+    status = "healthy" if rag.is_ready else "initializing"
     return HealthResponse(
-        status="healthy" if rag.is_ready else "initializing",
+        status=status,
         evidence_files=len(rag.evidence_files),
         is_ready=rag.is_ready
     )
@@ -274,7 +294,7 @@ async def get_sources():
 async def query_detective(request: QueryRequest):
     """Ask the detective a question about the evidence."""
     if not rag.is_ready:
-        raise HTTPException(status_code=503, detail="RAG system not ready")
+        raise HTTPException(status_code=503, detail="RAG system is still initializing. Please try again in a moment.")
     
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
