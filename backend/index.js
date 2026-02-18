@@ -78,41 +78,70 @@ let inMemorySessions = [];
 // HELPER: Check if MongoDB is connected
 // =============================================================================
 
+// =============================================================================
+// HELPER: Check if MongoDB is connected
+// =============================================================================
+
 const isMongoConnected = () => mongoose.connection.readyState === 1;
+
+// =============================================================================
+// HELPER: Safe JSON Fetch
+// =============================================================================
+
+async function fetchJson(url, options = {}) {
+  try {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get("content-type");
+    
+    if (contentType && contentType.includes("application/json")) {
+      const data = await response.json();
+      return { 
+        ok: response.ok, 
+        status: response.status, 
+        data 
+      };
+    } else {
+      const text = await response.text();
+      console.error(`❌ Python API Error (${response.status}): Expected JSON, got ${contentType}`);
+      console.error(`Response preview: ${text.substring(0, 200)}`);
+      return { 
+        ok: false, 
+        status: response.status === 200 ? 502 : response.status, // 200 but not JSON = 502
+        error: "Invalid content type from Python API", 
+        details: `Expected JSON, got ${contentType || 'unknown'}. This likely means the Python service is returning an error page (HTML).`
+      };
+    }
+  } catch (error) {
+    console.error('❌ Python API Connection Error:', error);
+    return { 
+      ok: false, 
+      status: 503, 
+      error: "Failed to connect to Python Service", 
+      details: error.message 
+    };
+  }
+}
+
 
 // =============================================================================
 // ROUTES
 // =============================================================================
 
 // Health check
+// Health check
 app.get('/api/health', async (req, res) => {
-  try {
-    const pythonHealth = await fetch(`${PYTHON_API}/health`);
-    let pythonData = { status: 'unknown' };
-    
-    const contentType = pythonHealth.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      pythonData = await pythonHealth.json();
-    } else {
-      pythonData = { status: 'error', details: 'Non-JSON response from Python API' };
-    }
-    
-    res.json({
-      status: 'healthy',
-      mongodb: isMongoConnected() ? 'connected' : 'disconnected',
-      pythonApi: pythonData.status,
-      evidenceFiles: pythonData.evidence_files
-    });
-  } catch (error) {
-    res.json({
-      status: 'degraded',
-      mongodb: isMongoConnected() ? 'connected' : 'disconnected',
-      pythonApi: 'unavailable',
-      error: error.message
-    });
-  }
+  const result = await fetchJson(`${PYTHON_API}/health`);
+  
+  res.json({
+    status: 'healthy',
+    mongodb: isMongoConnected() ? 'connected' : 'disconnected',
+    pythonApi: result.ok ? result.data.status : 'unavailable',
+    pythonDetails: result.ok ? result.data : result.error,
+    evidenceFiles: result.ok ? result.data.evidence_files : []
+  });
 });
 
+// Query the detective
 // Query the detective
 app.post('/api/query', async (req, res) => {
   try {
@@ -123,58 +152,45 @@ app.post('/api/query', async (req, res) => {
     }
     
     // Forward to Python API
-    try {
-      const response = await fetch(`${PYTHON_API}/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question })
-      });
-      
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await response.text();
-        console.error('Python API returned non-JSON:', text.substring(0, 200));
-        return res.status(502).json({ 
-          error: 'Invalid response from Python API', 
-          details: 'Received HTML/Success page instead of JSON. Check PYTHON_API_URL.' 
-        });
-      }
+    const result = await fetchJson(`${PYTHON_API}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
 
-      if (!response.ok) {
-        const error = await response.json();
-        return res.status(response.status).json(error);
-      }
-      
-      const data = await response.json();
-      
-      // Save to session if sessionId provided
-      if (sessionId && isMongoConnected()) {
-        try {
-          const session = await Session.findById(sessionId);
-          if (session) {
-            session.messages.push(
-              { role: 'user', content: question },
-              { role: 'detective', content: data.answer, sources: data.sources }
-            );
-            session.updatedAt = new Date();
-            
-            // Update title from first question if it's still default
-            if (session.title === 'New Investigation' && session.messages.length === 2) {
-              session.title = question.substring(0, 50) + (question.length > 50 ? '...' : '');
-            }
-            
-            await session.save();
-          }
-        } catch (err) {
-          console.error('Error saving to session:', err);
-        }
-      }
-      
-      res.json(data);
-    } catch (fetchError) {
-      console.error('Python API Fetch connection error:', fetchError);
-      return res.status(503).json({ error: 'Failed to connect to Detective Service', details: fetchError.message });
+    if (!result.ok) {
+      // If result.data exists (error details from Python), use it
+      // Otherwise use the error details we constructed
+      const errorPayload = result.data || { error: result.error, details: result.details };
+      return res.status(result.status).json(errorPayload);
     }
+    
+    const data = result.data;
+      
+    // Save to session if sessionId provided
+    if (sessionId && isMongoConnected()) {
+      try {
+        const session = await Session.findById(sessionId);
+        if (session) {
+          session.messages.push(
+            { role: 'user', content: question },
+            { role: 'detective', content: data.answer, sources: data.sources }
+          );
+          session.updatedAt = new Date();
+          
+          // Update title from first question if it's still default
+          if (session.title === 'New Investigation' && session.messages.length === 2) {
+            session.title = question.substring(0, 50) + (question.length > 50 ? '...' : '');
+          }
+          
+          await session.save();
+        }
+      } catch (err) {
+        console.error('Error saving to session:', err);
+      }
+    }
+      
+    res.json(data);
   } catch (error) {
     console.error('Query error:', error);
     res.status(500).json({ error: 'Failed to query detective', details: error.message });
@@ -238,16 +254,16 @@ app.get('/api/sessions/:id', async (req, res) => {
 });
 
 // Get evidence sources
+// Get evidence sources
 app.get('/api/sources', async (req, res) => {
-  try {
-    const response = await fetch(`${PYTHON_API}/sources`);
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch sources' });
+  const result = await fetchJson(`${PYTHON_API}/sources`);
+  if (!result.ok) {
+    return res.status(result.status).json(result.data || { error: result.error });
   }
+  res.json(result.data);
 });
 
+// Upload evidence file
 // Upload evidence file
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
@@ -261,7 +277,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const formData = new FormData();
     formData.append('file', blob, req.file.originalname);
 
-    const response = await fetch(`${PYTHON_API}/upload`, {
+    const result = await fetchJson(`${PYTHON_API}/upload`, {
       method: 'POST',
       body: formData
     });
@@ -269,47 +285,39 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     // Clean up temp file
     fs.unlinkSync(req.file.path);
 
-    if (!response.ok) {
-      const error = await response.json();
-      return res.status(response.status).json(error);
+    if (!result.ok) {
+        return res.status(result.status).json(result.data || { error: result.error });
     }
 
-    const data = await response.json();
-    res.json(data);
+    res.json(result.data);
   } catch (error) {
     console.error('Upload error:', error);
     // Clean up temp file on error
     if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+      try { fs.unlinkSync(req.file.path); } catch(e) {}
     }
     res.status(500).json({ error: 'Failed to upload file', details: error.message });
   }
 });
 
 // Read evidence file content
+// Read evidence file content
 app.get('/api/evidence/:filename', async (req, res) => {
-  try {
-    const response = await fetch(`${PYTHON_API}/evidence/${encodeURIComponent(req.params.filename)}`);
-    if (!response.ok) {
-      const error = await response.json();
-      return res.status(response.status).json(error);
-    }
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to read evidence file' });
+  const result = await fetchJson(`${PYTHON_API}/evidence/${encodeURIComponent(req.params.filename)}`);
+  if (!result.ok) {
+    return res.status(result.status).json(result.data || { error: result.error });
   }
+  res.json(result.data);
 });
 
 // Get investigation tips
+// Get investigation tips
 app.get('/api/tips', async (req, res) => {
-  try {
-    const response = await fetch(`${PYTHON_API}/tips`);
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch tips' });
+  const result = await fetchJson(`${PYTHON_API}/tips`);
+  if (!result.ok) {
+    return res.status(result.status).json(result.data || { error: result.error });
   }
+  res.json(result.data);
 });
 
 // =============================================================================
