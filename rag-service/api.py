@@ -101,7 +101,7 @@ class LocalEmbeddings(Embeddings):
         # FastEmbed uses "Qdrant/all-MiniLM-L6-v2-onnx" by default when "sentence-transformers/all-MiniLM-L6-v2" is requested
         # We'll use the specific FastEmbed supported name to be safe, or just let it map automatically
         from fastembed import TextEmbedding
-        self.model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5") # efficient and good quality
+        self.model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", threads=1, cache_dir="/tmp/fastembed_cache") # efficient and good quality
         print("✅ Embedding model loaded")
     
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -414,4 +414,5 @@ async def get_tips():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
